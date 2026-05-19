@@ -1,0 +1,9 @@
+# TIRex dependencies
+# Install with: pip install -r requirements.txt
+
+PyQt6>=6.4.0
+matplotlib>=3.7.0
+biopython>=1.81
+pandas>=2.0.0
+ostir>=2.0.0
+pyinstaller>=6.0.0
