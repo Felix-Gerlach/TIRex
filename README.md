@@ -1,29 +1,62 @@
 # TIRex — Translation Initiation Rate Explorer
 
-Desktop GUI for predicting translation initiation rates (TIR) of bacterial mRNA sequences. Built on the [OSTIR](https://github.com/barricklab/ostir) prediction engine, TIRex adds interactive visualization, ORF analysis, protein property calculations, and a virtual SDS-PAGE gel simulator.
+Desktop GUI for predicting and **engineering** translation initiation rates (TIR) of bacterial mRNAs. Built on the [OSTIR](https://github.com/barricklab/ostir) prediction engine, TIRex adds interactive visualization, ORF analysis, protein property calculations, a sequence‑editing optimizer (**TIR‑Tuner**), a codon optimizer, a virtual SDS‑PAGE gel, batch scoring, and session/report export.
 
-## Features
+---
 
-- **TIR prediction** — runs OSTIR on any DNA/RNA sequence to find all start codons and predict their translation initiation rates
-- **Interactive sequence map** — linear and circular views showing ORFs as color-coded arrows with start codon type, stop codon, and RBS position
-- **Zoom-dependent detail** — zooming into the linear view reveals individual nucleotide letters along the backbone and amino acid letters inside each ORF
-- **ORF results table** — sortable table with TIR, free energy components (dG total, dG rRNA:mRNA, dG mRNA, dG spacing, dG standby, dG start codon), protein length, MW, pI, and GRAVY
-- **TIR range filter** — slider to show only ORFs within a specific TIR range; affects both the visualization and the table
-- **ORF group coloring** — highlights start codons that share the same stop codon (alternative starts of the same protein) in distinct colors
-- **Protein analysis** — molecular weight (kDa), isoelectric point, GRAVY hydrophobicity score, and amino acid composition via Biopython
-- **Copy amino acid sequences** — one-click clipboard copy of any ORF's translated amino acid sequence
-- **SDS-PAGE gel simulator** — virtual Coomassie-stained gel with configurable lanes, marker ladders, acrylamide percentage, E. coli contaminant bands, and export to image
-- **FASTA import** — load sequences from FASTA files or paste directly
-- **Circular sequence support** — for plasmid and circular genome analysis
+## Table of contents
 
-## Requirements
+- [Feature overview](#feature-overview)
+- [Requirements & install](#requirements--install)
+- [Running / building](#running--building)
+- [User manual](#user-manual)
+  - [1. Loading a sequence](#1-loading-a-sequence)
+  - [2. Anti‑SD configuration & dual scoring](#2-anti-sd-configuration--dual-scoring)
+  - [3. OSTIR options & running](#3-ostir-options--running)
+  - [4. Visualization](#4-visualization)
+  - [5. ORF results table](#5-orf-results-table)
+  - [6. Target protein & in‑frame filtering](#6-target-protein--in-frame-filtering)
+  - [7. TIR‑Tuner — sequence‑editing optimizer](#7-tir-tuner--sequence-editing-optimizer)
+  - [8. Codon optimizer](#8-codon-optimizer)
+  - [9. SDS‑PAGE gel simulator](#9-sds-page-gel-simulator)
+  - [10. Batch OSTIR](#10-batch-ostir)
+  - [11. Sessions & exports](#11-sessions--exports)
+- [Menu reference](#menu-reference)
+- [Project layout](#project-layout)
+- [Notes, calibration & limitations](#notes-calibration--limitations)
+- [Built with](#built-with)
+- [License](#license)
 
-- Python 3.10+
-- [ViennaRNA](https://www.tbi.univie.ac.at/RNA/#download) — must be installed and the executables (`RNAfold`, `RNAsubopt`, `RNAeval`) must be in your system PATH
+---
 
-### Python dependencies
+## Feature overview
 
-Install with:
+**Prediction & analysis**
+- Runs OSTIR to find every start codon (ATG/GTG/TTG) and predict its TIR plus the full free‑energy breakdown.
+- **Dual anti‑SD scoring** — score every ORF against two ribosomes (e.g. native *E. coli* + a custom host) and compare side‑by‑side.
+- Per‑ORF protein properties: length, MW, pI, GRAVY, amino‑acid composition (Biopython).
+- Interactive **linear / circular** sequence map with zoom‑dependent nucleotide & amino‑acid lettering.
+- Sortable results table (correct **numeric sorting**), TIR‑range filter, ORF‑group coloring.
+
+**Engineering (new)**
+- **TIR‑Tuner** — proposes nucleotide edits to **increase** initiation at a target start, **decrease** a downstream internal start without changing the protein, or build an **RBS library / TIR ramp**. Includes greedy and **beam search**, **parallel scoring**, constraint **warnings**, iterative in‑place editing, old‑vs‑new diff, and **HTML report** export with **Q5 mutagenesis primers**.
+- **Codon optimizer** — synonymous CDS rewrite to raise CAI for a host without changing the protein.
+- **SDS‑PAGE gel simulator** — virtual Coomassie gel of the predicted protein mixture.
+- **Batch OSTIR** — score every record across one or more multi‑FASTA files into one table.
+
+**I/O**
+- Import **FASTA**, **GenBank** (`.gb/.gbk`, with CDS features), and **SnapGene** (`.dna`).
+- Save/restore complete **sessions** (`.tirex`).
+- Export results CSV, protein FASTA, visualization PNG/SVG, gel image, and the tuning report.
+
+---
+
+## Requirements & install
+
+- **Python 3.10+**
+- **[ViennaRNA](https://www.tbi.univie.ac.at/RNA/#download)** — the executables `RNAfold`, `RNAsubopt`, `RNAeval` must be on your system **PATH**. TIRex checks for them on startup and refuses to run if they're missing.
+
+Install the Python dependencies:
 
 ```bash
 pip install -r requirements.txt
@@ -32,145 +65,246 @@ pip install -r requirements.txt
 | Package | Purpose |
 |---------|---------|
 | PyQt6 | GUI framework |
-| matplotlib | Sequence visualization and gel rendering |
-| biopython | Protein property analysis (MW, pI, GRAVY) |
-| pandas | Data handling and CSV export |
-| ostir | Translation initiation rate prediction engine |
+| matplotlib | Sequence visualization, ΔTIR heatmap, gel rendering |
+| biopython | Protein properties (MW/pI/GRAVY) **and** GenBank/SnapGene import |
+| pandas | CSV export |
+| ostir | Translation‑initiation‑rate prediction engine |
 
-## Usage
+---
+
+## Running / building
 
 ```bash
 python main.py
 ```
 
-Or build a standalone Windows executable:
+Build a standalone Windows executable:
 
 ```bash
-build.bat
+build.bat        # output in dist\TIRex\TIRex.exe
 ```
 
-The `.exe` will be in `dist\TIRex\TIRex.exe`. ViennaRNA must still be in PATH on the target machine.
+ViennaRNA must still be on PATH on the target machine. (The launcher calls `multiprocessing.freeze_support()` so the optimizer's parallel scoring works in frozen builds.)
 
 ---
 
-## User Manual
+## User manual
 
-### 1. Entering a sequence
+### 1. Loading a sequence
 
-The left panel contains the input area:
+In the left **Input** panel you can either paste a sequence or load a file with **“Load sequence…”** (`Ctrl+O`). Supported formats:
 
-- **Paste** a raw DNA or RNA sequence directly into the text box
-- **Load FASTA** — click the "Load FASTA..." button to import a `.fasta`, `.fa`, `.fna`, or `.txt` file. The first sequence in the file is used and the filename is auto-filled as the sequence name
-- **Sequence name** — optional label shown in the results (defaults to "sequence")
+| Format | Extensions | Notes |
+|--------|-----------|-------|
+| FASTA | `.fasta .fa .fna .txt` | First record used; header becomes the name |
+| GenBank | `.gb .gbk .genbank` | Sequence + forward‑strand **CDS features** are detected and reported |
+| SnapGene | `.dna` | Read via Biopython's `snapgene` parser |
+| VectorBee | `.vbee` | **Not yet supported** — shows a clear message; export to GenBank/FASTA for now |
 
-### 2. Configuring OSTIR options
+**Input sanitization (robust against the old crash):** pasted/loaded sequence is cleaned to `A/C/G/T` (U→T); anything else (digits, `N`, dashes, whitespace) is removed and you're notified. This prevents OSTIR's internal validator from raising the cryptic `print() got an unexpected keyword 'style'` error.
 
-Below the sequence input, adjust these parameters before running:
+### 2. Anti‑SD configuration & dual scoring
+
+The **Anti‑SD (ribosome)** group controls which ribosome(s) the TIR is scored against. The anti‑SD is the 9‑nt 3′ tail of the 16S rRNA that base‑pairs with the mRNA Shine‑Dalgarno.
+
+- **Primary (always scored)** — dropdown of saved presets + an editable field. Default `E. coli (native) = ACCTCCTTA`.
+- **“Also score with a secondary anti‑SD”** — when ticked, every ORF is **also** scored against this second anti‑SD, producing a side‑by‑side comparison column. Default preset `pET T7 (derived) = CTCCTTCTT`.
+- **Derive from RBS…** — paste an mRNA RBS/5′ leader; TIRex finds the SD core and stores its reverse complement as a new named anti‑SD preset.
+- **Save…** — persist the current secondary anti‑SD as a named preset.
+
+Presets are stored in `asd_presets.json` next to the program and survive between sessions. Anti‑SDs must be exactly **9 A/C/G/T** bases — TIRex validates this before running and warns clearly otherwise.
+
+> Result: the table shows **`TIR (1° aSD)`** and **`TIR (2° aSD)`** columns. Both numbers come straight from OSTIR (two passes), not an approximation.
+
+### 3. OSTIR options & running
 
 | Option | Description | Default |
 |--------|-------------|---------|
-| **Start pos** | Most 5' position to scan for start codons (1-indexed). 0 = scan entire sequence | 0 (Auto) |
-| **End pos** | Most 3' position to scan. 0 = scan to end | 0 (Auto) |
-| **Anti-SD** | 9 bp anti-Shine-Dalgarno sequence (3' end of 16S rRNA) | `ACCTCCTTA` (E. coli) |
-| **Circular** | Treat the sequence as circular (for plasmids) | Off |
-| **Threads** | Number of parallel threads for OSTIR | 1 |
-| **Decimals** | Decimal places in TIR output | 4 |
-| **Constraints** | ViennaRNA folding constraints string (advanced) | Empty |
+| Start pos / End pos | Restrict the start‑codon scan window (1‑indexed; 0 = auto) | Auto |
+| Circular | Treat the sequence as circular (plasmids) | Off |
+| Threads | OSTIR worker threads | 1 |
+| Decimals | TIR decimal places | 4 |
+| Constraints | ViennaRNA folding‑constraint string (advanced) | Empty |
 
-For most use cases, the defaults work well. Change the **Anti-SD** sequence only when working with non-E. coli organisms.
+Click **Run OSTIR**. For each start codon TIRex finds the downstream ORF (to the next in‑frame stop), translates it, and computes protein properties.
 
-### 3. Running the analysis
+### 4. Visualization
 
-Click **"Run OSTIR"**. The button changes to "Running..." and the status bar shows progress. OSTIR scans for all start codons (ATG, GTG, TTG) and predicts each one's translation initiation rate. For each start codon, TIRex then:
+Top panel; toggle **Linear / Circular**.
 
-1. Finds the downstream ORF (to the next in-frame stop codon)
-2. Translates the ORF to an amino acid sequence
-3. Calculates protein properties (MW, pI, GRAVY) via Biopython
+- ORFs drawn as arrows/arcs, colored by TIR (log scale); start caps colored by codon (ATG red, GTG orange, TTG amber); stop caps dark; RBS pills with a connector to the start codon; every ORF numbered.
+- **Mouse‑wheel zoom**; at high zoom, per‑base letters (A green / T red / G yellow / C blue) and amino‑acid letters appear.
+- **TIR range filter** (min/max + reset) — hides out‑of‑range ORFs in both the map and the table and renumbers.
+- **Color by ORF group** — start codons sharing a stop codon get the same color.
+- Matplotlib toolbar for pan/zoom; export via the Export menu.
 
-### 4. Reading the visualization
-
-The top panel shows the sequence map. Toggle between views using the **Linear** and **Circular** buttons.
-
-#### Linear view
-
-- **Backbone** — grey horizontal line representing the full sequence
-- **ORF arrows** — right-pointing arrows, one per start codon. Length = full ORF from start to stop codon
-- **Color gradient** — arrows are colored by TIR on a log10 scale (viridis colormap). Higher TIR = brighter/yellow
-- **Start codon caps** — colored band at the left edge of each arrow: red = ATG, orange = GTG, amber = TTG
-- **Stop codon caps** — dark band at the right tip of each arrow
-- **RBS markers** — yellow pills above the backbone showing the Shine-Dalgarno position. A dotted line connects the RBS to its start codon
-- **Labels** — each ORF is numbered (#1, #2, ...) ranked by position. Large ORFs show the label inside; small ORFs show it as a callout above
-- **Zoom** — scroll the mouse wheel to zoom in. At high zoom, individual nucleotide letters (color-coded: A=green, T=red, G=yellow, C=blue) appear along the backbone, and amino acid letters appear inside the ORF arrows
-- **Pan** — use the matplotlib toolbar at the bottom to pan or reset the view
-
-#### Circular view
-
-Same information rendered on a circular map. ORFs are arcs inside the backbone ring. Position ticks and labels ring the outside. The center shows sequence length and number of ORFs displayed.
-
-#### Toolbar options
-
-- **TIR range** — set minimum and maximum TIR values. Only ORFs within this range are drawn and shown in the table. Click the reset button to restore the full range
-- **Color by ORF group** — when checked, start codons sharing the same stop codon (i.e. alternative start sites of the same protein) are given the same color. Useful for identifying which start codons lead to the same protein
-
-### 5. Using the ORF results table
-
-The bottom panel lists every detected ORF with these columns:
+### 5. ORF results table
 
 | Column | Meaning |
 |--------|---------|
-| **Show** | Checkbox — toggle visibility of this ORF on the map |
-| **Copy AA** | Click to copy the amino acid sequence to clipboard |
-| **#** | Display rank (by start position, restarts from 1 when filtering) |
-| **Position** | Start codon position (1-indexed) |
-| **Codon** | Start codon type (ATG/GTG/TTG) |
-| **TIR** | Predicted translation initiation rate |
-| **RBS dist** | Distance in bp between the Shine-Dalgarno sequence and start codon |
-| **dG total** | Total free energy of translation initiation |
-| **dG rRNA:mRNA** | Free energy of rRNA-mRNA hybridization |
-| **dG mRNA** | Free energy of mRNA folding near the start codon |
-| **dG spacing** | Free energy penalty for non-optimal RBS-start spacing |
-| **dG standby** | Free energy of the standby site |
-| **dG start** | Free energy contribution of the start codon identity |
-| **Length (aa)** | Protein length in amino acids |
-| **MW (kDa)** | Molecular weight in kilodaltons |
-| **pI** | Isoelectric point |
-| **GRAVY** | Grand average of hydropathy (positive = hydrophobic, negative = hydrophilic) |
-| **Stop?** | Whether a stop codon was found in-frame |
+| Show | Toggle ORF visibility on the map |
+| Copy AA | Copy the translated amino‑acid sequence |
+| # | Display rank by start position (restarts at 1 when filtered) |
+| Position / Codon | Start position & codon type |
+| **TIR (1° aSD)** | TIR against the primary anti‑SD |
+| **TIR (2° aSD)** | TIR against the secondary anti‑SD (— if disabled) |
+| RBS dist | SD↔start spacing (bp) |
+| dG total / rRNA:mRNA / mRNA / spacing / standby / start | OSTIR free‑energy components |
+| Length (aa) / MW (kDa) / pI / GRAVY | Protein properties |
+| Stop? | In‑frame stop found |
 
-**Sorting** — click any column header to sort. Click again to reverse.
+- **Sorting** is now **numeric** on numeric columns (e.g. `67.9` sorts before `4385.2`); blanks sink to the bottom. Click a header to sort, again to reverse.
+- **Show all / Hide all** buttons; **Clear target** and **SDS‑PAGE…** buttons.
+- **Right‑click a row:** *Set as target*, *Tune translation rate…*, *Clear target*, *Simulate SDS‑PAGE…*.
 
-**Show/Hide all** — buttons to toggle all ORFs at once.
+### 6. Target protein & in‑frame filtering
 
-**Right-click context menu:**
-- *Set as target* — marks an ORF as the target protein for the SDS-PAGE simulator
-- *Clear target* — removes the target selection
-- *Simulate SDS-PAGE* — opens the gel simulator
+Right‑click an ORF → **Set as target**. TIRex then hides every fragment **not in the target's reading frame** (`(start − target_start) mod 3 ≠ 0`) from both the table and the map, and renumbers the rest. This isolates the alternative start sites of one protein. **Clear target** (button or Tools menu) restores all ORFs. The target also seeds the SDS‑PAGE “target group” lanes.
 
-### 6. SDS-PAGE gel simulator
+### 7. TIR‑Tuner — sequence‑editing optimizer
 
-Access via the **"SDS-PAGE..."** button in the table header or the right-click menu.
+Open via **Tools → Tune translation rate… (`Ctrl+T`)** or a row's right‑click menu (seeds that ORF as the target). The Tuner proposes concrete nucleotide edits, scores each with OSTIR, and lets you apply them iteratively.
 
-The simulator renders a virtual Coomassie-stained gel based on the predicted proteins:
+**Scoring anti‑SD** — a dropdown at the top selects which ribosome the optimizer scores against (your Primary and Secondary anti‑SDs). **Switching it re‑scans** the current sequence so all numbers reflect that ribosome.
 
-- **Marker lane** — choose from preset ladders (PageRuler Prestained Plus, Precision Plus Dual Color, etc.)
-- **Acrylamide %** — select gel percentage (affects band migration)
-- **Lane types:**
-  - *Marker* — molecular weight standard
-  - *Target only* — just the target protein
-  - *Contaminants only* — common E. coli His-tag co-purifying contaminants
-  - *Target group (incl. alt starts)* — the target protein plus all alternative start-site variants sharing the same stop codon
-  - *Target group + contaminants* — combined lane
-  - *Custom* — add arbitrary bands
-- **Add/remove lanes** — build your gel layout
-- **Contaminant table** — view and configure the E. coli contaminant band list
-- **Export** — save the gel image to file
+#### Modes
 
-### 7. Exporting results
+**(a) Increase initiation at a target start**
+Edits the upstream window between the SD and the start codon. Options:
+- *Upstream window (nt)* and *Include dinucleotide substitutions*.
+- **Search depth:**
+  - *Single+dinuc* — enumerate all single substitutions/insertions/deletions + dinucleotide substitutions (depth‑1), ranked by TIR.
+  - *Greedy* — repeatedly apply the single best edit until a *target fold* or *max rounds* is reached.
+  - *Beam* — keep the best *beam‑width* partial solutions each round and expand each; finds stronger multi‑edit combinations than greedy.
 
-- **File → Export CSV** — save the full ORF results table as a CSV file
-- **File → Save Figure** — save the current visualization (linear or circular) as a PNG image
-- **Copy AA** — copy individual amino acid sequences from the table
-- **SDS-PAGE export** — save the simulated gel image from within the gel dialog
+**(b) Decrease a downstream start (protein‑preserving)**
+Suppresses an internal start codon **without changing the main protein** — every edit is synonymous in the main reading frame. Options:
+- *Main start (keep)* and *Downstream start (suppress)*.
+- **“Only downstream starts in frame with main”** — restricts the downstream list to internal in‑frame starts (position a multiple of 3 from the main start).
+- *Strategy:* `codon swap` (mutate the codon(s) overlapping the internal start so it's no longer ATG/GTG/TTG), `RBS synonymous` (synonymously weaken the internal SD/spacer), or `both`.
+- *RBS window (nt)*. Each candidate reports the downstream ΔTIR **and** the main‑start ΔTIR (which should stay ~0).
+
+**(c) Build RBS library / TIR ramp**
+Produces a panel of *N* variants whose predicted TIRs are **log‑spaced** across the achievable range (weak → strong), including wild‑type — an expression dilution series for experiments.
+
+#### Constraint warnings (soft‑flag)
+
+Every candidate is checked and any issues appear in a **Warnings** column (amber, with tooltips) — nothing is rejected, you decide:
+
+- newly‑created **restriction site** (default set: EcoRI, BamHI, HindIII, XhoI, NdeI, NotI, XbaI, SpeI, PstI, SalI, KpnI, SacI, NcoI, BglII, NheI),
+- newly‑created **start codon** (ATG/GTG/TTG) near the edit,
+- newly‑created **in‑frame stop codon**,
+- newly‑created **Shine‑Dalgarno‑like motif**,
+- **homopolymer run** > 4,
+- local **GC** outside 25–75 %.
+
+#### Results & iterative editing
+
+The results table mirrors the main table plus **Apply**, **Warnings**, **Notes**, and **Copy seq** columns, and (decrease mode) **Main ΔTIR**.
+
+- **Tick “Apply”** on a row to adopt that edit. The Tuner **stays open**, updates to the new sequence, **re‑scans** start codons, logs the edit under **Applied edits (this session)**, and clears the results so you can predict the next change. This enables rapid stacking of edits.
+- **↩ Undo last** reverts the most recent applied edit.
+- **Compare…** opens a position‑aware **old‑vs‑new diff** (amber = substitution, green = insertion, red = deletion).
+- **✓ Apply to TIRex & close** sends the final tuned sequence back to the main window, which loads it (auto‑versioning the name `…_v1, _v2`) and re‑runs OSTIR.
+
+Under the hood, candidate scoring runs in **parallel** (process pool, workers = CPU−1) for large batches, with a sequential fallback, and an OSTIR result cache avoids re‑folding duplicates.
+
+#### ΔTIR heatmap & region labels
+
+The **Graph** tab shows a saturation‑mutagenesis heatmap: position × base, colored by **ΔTIR** (green = boosts initiation, red = lowers it), wild‑type cells outlined. You can add **labeled regions** (e.g. *SD*, *spacer*, *start codon*) as colored bars above the heatmap (From/To/label/color), remove, or clear them.
+
+#### Export HTML report
+
+**Export report…** writes a self‑contained HTML file containing: the wild‑type → final TIR and fold change, the run metadata, the list of applied edits, the colour‑coded sequence diff, **Q5 / NEBaseChanger‑style mutagenesis primers** for each applied edit, and the embedded ΔTIR heatmap. Opens in any browser.
+
+> Primer Tm is an estimate — verify with the NEB Tm calculator before ordering.
+
+### 8. Codon optimizer
+
+**Tools → Codon optimizer (CAI)…**. Pick an ORF (uses its CDS) or paste a CDS, choose a **host** (ships *E. coli K‑12*; extensible via `CODON_USAGE`), and set **Preserve first N codons** (they overlap the initiation region and affect TIR). **Optimize** rewrites the CDS to the highest‑usage synonymous codon at each position **without changing the protein**, and reports **CAI before→after**, **GC before→after**, codons changed, and confirms the protein is preserved. Copy the optimized CDS to the clipboard.
+
+### 9. SDS‑PAGE gel simulator
+
+**Tools → Simulate SDS‑PAGE gel…**, the table's **SDS‑PAGE…** button, or a row's right‑click menu. Renders a virtual Coomassie gel of the predicted protein mixture:
+- Selectable **marker ladder** and **acrylamide %** (affects migration).
+- Configurable **lanes**: marker, target only, target group (incl. alt starts), contaminants only, combinations, custom.
+- Editable list of common **E. coli His‑tag co‑purifying contaminants**, with a master‑intensity slider and uniform/TIR‑proportional band intensities.
+- Respects the active **TIR filter** and only draws **selected** (visible) proteins. Export the gel image.
+
+### 10. Batch OSTIR
+
+**Tools → Batch OSTIR (multi‑FASTA)…**. Add one or more (multi‑)FASTA files, set the anti‑SD, and **Run batch**. Every record is scored in a background thread and collected into one sortable table (Record, Start pos, Codon, TIR, dG total, RBS dist). **Export CSV** for the combined results.
+
+### 11. Sessions & exports
+
+- **File → Save session… (`Ctrl+S`)** / **Open session…** — persist/restore the whole working state (sequence, anti‑SD params, full results, target, TIR filter) as a `.tirex` JSON file.
+- **Export → Results as CSV (`Ctrl+Shift+S`)** — full ORF table (both TIR columns + composition).
+- **Export → Protein sequences as FASTA** — visible ORFs' amino‑acid sequences.
+- **Export → Visualization as PNG / SVG** — the current map.
+- Tuner **Export report…** (HTML) and SDS‑PAGE image export as described above.
+
+---
+
+## Menu reference
+
+| Menu | Items |
+|------|-------|
+| **File** | Load sequence (FASTA/GenBank/.dna)… `Ctrl+O` · Save session… `Ctrl+S` · Open session… · Quit `Ctrl+Q` |
+| **Export** | Results as CSV… `Ctrl+Shift+S` · Protein sequences as FASTA… · Visualization as PNG… · Visualization as SVG… |
+| **Tools** | Tune translation rate (TIR‑Tuner)… `Ctrl+T` · Codon optimizer (CAI)… · Batch OSTIR (multi‑FASTA)… · Simulate SDS‑PAGE gel… · Clear target protein |
+| **Help** | About TIRex |
+
+---
+
+## Project layout
+
+```
+TIRex/
+  main.py                       app entry (dependency check, theme, freeze_support)
+  core/
+    ostir_runner.py             QThread wrapper; dual‑aSD scoring; input guards
+    orf_finder.py               ORF extent + translation
+    protein_analysis.py         MW / pI / GRAVY (Biopython)
+    gel_simulator.py            SDS‑PAGE physics, markers, contaminants
+    asd_presets.py              anti‑SD preset store + derive‑from‑RBS
+    codon_opt.py                CAI + host codon usage + synonymous optimizer
+    primers.py                  Q5 / NEBaseChanger primer design
+    seq_import.py               FASTA / GenBank / SnapGene loaders
+    session.py                  .tirex save/load
+    report.py                   self‑contained HTML report builder
+    tuner/
+      genetic_code.py           codon table, synonymous map, start/stop codons
+      scoring.py                OstirScorer: caching + parallel batch scoring
+      mutations.py              edit generators + synonymous enumeration
+      candidate.py              Candidate dataclass (TIR, Δ, warnings, …)
+      constraints.py            motif/synthesis soft‑flag checks
+      increase_engine.py        enumerate / greedy / beam
+      decrease_engine.py        codon swap / RBS synonymous
+      library.py                RBS library / TIR ramp
+  ui/
+    theme.py                    central palette + QSS
+    main_window.py              window, menus, wiring
+    input_panel.py              sequence input, anti‑SD group, options
+    visualization_widget.py     linear/circular map
+    orf_table_widget.py         results table (numeric sort, frame filter)
+    sds_page_widget.py          gel dialog
+    tuner_dialog.py             TIR‑Tuner (+ diff dialog)
+    tuner_worker.py             tuner background thread
+    result_plot.py              ΔTIR heatmap + region labels
+    codon_optimizer_dialog.py   codon optimizer UI
+    batch_dialog.py             batch OSTIR UI
+```
+
+---
+
+## Notes, calibration & limitations
+
+- **OSTIR is calibrated for *E. coli*.** TIRs are in arbitrary (log‑scaled) units; treat them as relative. For other hosts, set the appropriate **anti‑SD** before scoring/tuning — RBS edits are only meaningful against the correct ribosome. Not applicable to eukaryotes or leaderless mRNAs.
+- **Codon usage** ships *E. coli K‑12* only; add hosts in `core/codon_opt.py::CODON_USAGE`.
+- **Met internal starts** can't be removed by codon swap (Met has a single codon) — use the RBS‑synonymous strategy instead. Decrease‑mode edits are bounded to the main CDS so they stay synonymous.
+- **Primer Tm** is an estimate; verify with NEB's calculator. Primers assume whole‑plasmid PCR + KLD (NEBaseChanger style).
+- **`.vbee` import is not implemented** (format undocumented here) — please share a sample file to add support; meanwhile export to GenBank/FASTA.
+- Constraint checks are **advisory** (soft‑flagged), not hard filters.
 
 ---
 
@@ -178,14 +312,14 @@ The simulator renders a virtual Coomassie-stained gel based on the predicted pro
 
 | Tool | Purpose |
 |------|---------|
-| [OSTIR](https://github.com/barricklab/ostir) | Translation initiation rate prediction engine |
-| [ViennaRNA](https://www.tbi.univie.ac.at/RNA/) | RNA secondary structure prediction |
+| [OSTIR](https://github.com/barricklab/ostir) | TIR prediction engine |
+| [ViennaRNA](https://www.tbi.univie.ac.at/RNA/) | RNA secondary‑structure prediction |
 | [PyQt6](https://www.riverbankcomputing.com/software/pyqt/) | GUI framework |
-| [Matplotlib](https://matplotlib.org/) | Sequence visualization and gel rendering |
-| [Biopython](https://biopython.org/) | Protein property analysis |
-| [pandas](https://pandas.pydata.org/) | Data handling and CSV export |
-| [Claude Code](https://claude.ai/claude-code) | AI-assisted development |
+| [Matplotlib](https://matplotlib.org/) | Visualization, heatmap, gel |
+| [Biopython](https://biopython.org/) | Protein analysis + sequence file parsing |
+| [pandas](https://pandas.pydata.org/) | CSV export |
+| [Claude Code](https://claude.ai/claude-code) | AI‑assisted development |
 
 ## License
 
-GPL-3.0
+GPL‑3.0

@@ -21,7 +21,8 @@ COLUMNS = [
     ('#',             None,                        None,                                         True),
     ('Position',      'start_position',            str,                                          True),
     ('Codon',         'start_codon',               str,                                          False),
-    ('TIR',           'expression',                lambda v: f'{v:.4f}' if v else '—',           True),
+    ('TIR (1° aSD)',  'expression',                lambda v: f'{v:.4f}' if v else '—',           True),
+    ('TIR (2° aSD)',  'expression_secondary',      lambda v: f'{v:.4f}' if v else '—',           True),
     ('RBS dist',      'RBS_distance_bp',           lambda v: str(v),                             True),
     ('dG total',      'dG_total',                  lambda v: f'{v:.3f}' if v is not None else '—', True),
     ('dG rRNA:mRNA',  'dG_rRNA:mRNA',              lambda v: f'{v:.3f}' if v is not None else '—', True),
@@ -47,6 +48,26 @@ CODON_COLORS = {
 }
 
 
+class _NumericItem(QTableWidgetItem):
+    """Table item that sorts by a stored numeric value (UserRole+1) instead of
+    its display text, so 67.9 sorts before 4385.2 rather than after it.
+    Items with no numeric value (e.g. '—') sort to the bottom ascending."""
+
+    def __lt__(self, other):
+        a = self.data(Qt.ItemDataRole.UserRole + 1)
+        b = other.data(Qt.ItemDataRole.UserRole + 1)
+        if a is None and b is None:
+            return super().__lt__(other)
+        if a is None:
+            return False
+        if b is None:
+            return True
+        try:
+            return float(a) < float(b)
+        except (TypeError, ValueError):
+            return super().__lt__(other)
+
+
 class ORFTableWidget(QWidget):
 
     visibility_changed = pyqtSignal(int, bool)
@@ -55,6 +76,7 @@ class ORFTableWidget(QWidget):
     target_requested   = pyqtSignal(int)        # orf_index of target
     target_cleared     = pyqtSignal()
     open_gel_requested = pyqtSignal()
+    tune_requested     = pyqtSignal(int)        # orf_index to open in TIR-Tuner
 
     # ------------------------------------------------------------------ #
     def __init__(self, parent=None):
@@ -63,6 +85,7 @@ class ORFTableWidget(QWidget):
         self._updating = False    # guard against itemChanged loops
         self._tir_min = 0.0
         self._tir_max = float('inf')
+        self._frame_anchor = None   # target start position; hide out-of-frame
         self._build_ui()
 
     # ------------------------------------------------------------------ #
@@ -122,6 +145,7 @@ class ORFTableWidget(QWidget):
     # ------------------------------------------------------------------ #
     def update_results(self, results: list):
         self._results = results
+        self._frame_anchor = None     # fresh data → no target frame filter
         self._populate_table()
 
     def clear(self):
@@ -138,6 +162,17 @@ class ORFTableWidget(QWidget):
         self._tir_max = float(hi) if hi and hi > 0 else float('inf')
         self._populate_table()
 
+    def set_frame_filter(self, target_start):
+        """Hide every fragment NOT in the target's reading frame (frame =
+        start position modulo 3). Pass None to clear."""
+        self._frame_anchor = (int(target_start)
+                              if target_start is not None else None)
+        self._populate_table()
+
+    def clear_frame_filter(self):
+        self._frame_anchor = None
+        self._populate_table()
+
     # ------------------------------------------------------------------ #
     #  Table population                                                    #
     # ------------------------------------------------------------------ #
@@ -147,11 +182,17 @@ class ORFTableWidget(QWidget):
         self.table.setRowCount(0)
 
         # ------------------------------------------------------------
-        # Apply TIR filter + compute display ranks (by start_position).
+        # Apply TIR + reading-frame filters; compute display ranks.
         # ------------------------------------------------------------
         def passes(r):
             t = r.get('expression') or 0
-            return self._tir_min <= t <= self._tir_max
+            if not (self._tir_min <= t <= self._tir_max):
+                return False
+            if self._frame_anchor is not None:
+                sp = r.get('start_position')
+                if sp is None or (sp - self._frame_anchor) % 3 != 0:
+                    return False
+            return True
 
         filtered = [r for r in self._results if passes(r)]
         # Rank by start position so # matches the visualization's numbering.
@@ -186,7 +227,7 @@ class ORFTableWidget(QWidget):
 
                 if header == '#':
                     rank = display_rank.get(r.get('orf_index'), row_idx + 1)
-                    item = QTableWidgetItem(str(rank))
+                    item = _NumericItem(str(rank))
                     item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
                     item.setFlags(
                         Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
@@ -224,7 +265,7 @@ class ORFTableWidget(QWidget):
                     except Exception:
                         text = str(val)
 
-                item = QTableWidgetItem(text)
+                item = _NumericItem(text) if numeric else QTableWidgetItem(text)
                 item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
                 item.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
 
@@ -242,8 +283,8 @@ class ORFTableWidget(QWidget):
                         item.setForeground(QBrush(col))
                         item.setFont(QFont('Consolas', 8, QFont.Weight.Bold))
 
-                # TIR background tint
-                if header == 'TIR' and val:
+                # TIR background tint (both anti-SD columns)
+                if header.startswith('TIR') and val:
                     try:
                         tv = float(val)
                         if tv > 10000:
@@ -347,6 +388,10 @@ class ORFTableWidget(QWidget):
             act_target = menu.addAction('Set as target')
             act_target.triggered.connect(
                 lambda: self.target_requested.emit(int(orf_index))
+            )
+            act_tune = menu.addAction('Tune translation rate…')
+            act_tune.triggered.connect(
+                lambda: self.tune_requested.emit(int(orf_index))
             )
         act_clear = menu.addAction('Clear target')
         act_clear.triggered.connect(self.target_cleared.emit)

@@ -23,7 +23,11 @@ from .input_panel import InputPanel
 from .visualization_widget import VisualizationWidget
 from .orf_table_widget import ORFTableWidget
 from .sds_page_widget import SDSPageDialog
+from .tuner_dialog import TunerDialog
+from .codon_optimizer_dialog import CodonOptimizerDialog
+from .batch_dialog import BatchDialog
 from core.ostir_runner import OSTIRRunner
+from core import session as _session
 
 
 class MainWindow(QMainWindow):
@@ -53,8 +57,8 @@ class MainWindow(QMainWindow):
 
         # Left: input panel (fixed reasonable width)
         self.input_panel = InputPanel()
-        self.input_panel.setMinimumWidth(260)
-        self.input_panel.setMaximumWidth(340)
+        self.input_panel.setMinimumWidth(290)
+        self.input_panel.setMaximumWidth(360)
         self.input_panel.run_requested.connect(self._on_run_requested)
         root_splitter.addWidget(self.input_panel)
 
@@ -73,6 +77,7 @@ class MainWindow(QMainWindow):
         self.orf_table.target_requested.connect(self._on_target_requested)
         self.orf_table.target_cleared.connect(self._on_target_cleared)
         self.orf_table.open_gel_requested.connect(self._open_gel_dialog)
+        self.orf_table.tune_requested.connect(self._open_tuner_dialog)
         self.viz_widget.tir_range_changed.connect(self.orf_table.set_tir_range)
         right_splitter.addWidget(self.orf_table)
 
@@ -89,10 +94,21 @@ class MainWindow(QMainWindow):
         # File menu
         file_menu = mb.addMenu('File')
 
-        load_action = QAction('Load FASTA…', self)
+        load_action = QAction('Load sequence (FASTA/GenBank/.dna)…', self)
         load_action.setShortcut('Ctrl+O')
         load_action.triggered.connect(self.input_panel._load_fasta)
         file_menu.addAction(load_action)
+
+        file_menu.addSeparator()
+
+        save_session_action = QAction('Save session…', self)
+        save_session_action.setShortcut('Ctrl+S')
+        save_session_action.triggered.connect(self._save_session)
+        file_menu.addAction(save_session_action)
+
+        open_session_action = QAction('Open session…', self)
+        open_session_action.triggered.connect(self._open_session)
+        file_menu.addAction(open_session_action)
 
         file_menu.addSeparator()
 
@@ -125,6 +141,17 @@ class MainWindow(QMainWindow):
 
         # Tools menu
         tools_menu = mb.addMenu('Tools')
+        tuner_action = QAction('Tune translation rate (TIR-Tuner)…', self)
+        tuner_action.setShortcut('Ctrl+T')
+        tuner_action.triggered.connect(lambda: self._open_tuner_dialog(None))
+        tools_menu.addAction(tuner_action)
+        codon_action = QAction('Codon optimizer (CAI)…', self)
+        codon_action.triggered.connect(self._open_codon_optimizer)
+        tools_menu.addAction(codon_action)
+        batch_action = QAction('Batch OSTIR (multi-FASTA)…', self)
+        batch_action.triggered.connect(self._open_batch_dialog)
+        tools_menu.addAction(batch_action)
+        tools_menu.addSeparator()
         gel_action = QAction('Simulate SDS-PAGE gel…', self)
         gel_action.triggered.connect(self._open_gel_dialog)
         tools_menu.addAction(gel_action)
@@ -164,6 +191,7 @@ class MainWindow(QMainWindow):
 
         self._sequence = sequence
         self._results = []
+        self._target_orf_index = None
         self.input_panel.set_running(True)
         self.progress_bar.setVisible(True)
 
@@ -224,31 +252,140 @@ class MainWindow(QMainWindow):
                        if r.get('orf_index') == orf_index), None)
         if target is None:
             return
+        target_start = target.get('start_position')
         target_end = target.get('end_position')
         self._target_orf_index = orf_index
+        # Hide every fragment that is NOT in the same reading frame as the
+        # target start codon (frame = start position modulo 3).
         for r in self._results:
-            r['visible'] = (r.get('end_position') == target_end)
-        self.orf_table.refresh()
+            sp = r.get('start_position')
+            r['visible'] = (sp is not None
+                            and (sp - target_start) % 3 == 0)
+        # Remove out-of-frame rows from the table entirely (not just uncheck).
+        self.orf_table.set_frame_filter(target_start)
         # Push visibility into viz for every ORF
         for r in self._results:
             self.viz_widget.update_visibility(
                 r.get('orf_index'), r.get('visible', True)
             )
+        n_vis = sum(1 for r in self._results if r.get('visible'))
         self.status_label.setText(
-            f'Target set: ORF at position {target.get("start_position")} '
-            f'(stop {target_end}). Showing group only.'
+            f'Target set: ORF at position {target_start} (stop {target_end}). '
+            f'Showing {n_vis} in-frame fragment(s); out-of-frame hidden.'
         )
 
     def _on_target_cleared(self):
         self._target_orf_index = None
         for r in self._results:
             r['visible'] = True
-        self.orf_table.refresh()
+        self.orf_table.clear_frame_filter()
         for r in self._results:
             self.viz_widget.update_visibility(
                 r.get('orf_index'), True
             )
         self.status_label.setText('Target cleared. Showing all ORFs.')
+
+    def _open_tuner_dialog(self, orf_index=None):
+        if not self._results:
+            QMessageBox.information(self, 'No data',
+                                    'Run OSTIR first to populate ORF results.')
+            return
+        # Offer both configured anti-SDs to the tuner so the user can choose
+        # which ribosome the optimizer scores against.
+        ip = self.input_panel
+        asd_options = [(f'Primary · {ip.primary_cmb.currentText()}',
+                        ip.primary_asd())]
+        sec = ip.secondary_asd()
+        if sec and sec != ip.primary_asd():
+            asd_options.append((f'Secondary · {ip.secondary_cmb.currentText()}',
+                                sec))
+        dlg = TunerDialog(parent=self, sequence=self._sequence,
+                          results=self._results,
+                          selected_orf_index=orf_index,
+                          asd_options=asd_options)
+        dlg.apply_sequence.connect(self._apply_tuned_sequence)
+        dlg.exec()
+
+    def _open_codon_optimizer(self):
+        dlg = CodonOptimizerDialog(parent=self, results=self._results)
+        dlg.exec()
+
+    def _open_batch_dialog(self):
+        dlg = BatchDialog(parent=self, default_asd=self.input_panel.primary_asd())
+        dlg.exec()
+
+    # ------------------------------------------------------------------ #
+    #  Session save / load                                                 #
+    # ------------------------------------------------------------------ #
+    def _save_session(self):
+        if not self._results and not self._sequence:
+            QMessageBox.information(self, 'Nothing to save',
+                                    'Run OSTIR first, then save the session.')
+            return
+        path, _ = QFileDialog.getSaveFileName(
+            self, 'Save session', 'session.tirex',
+            'TIRex session (*.tirex);;All files (*)')
+        if not path:
+            return
+        try:
+            ip = self.input_panel
+            params = {
+                'name': ip.seq_name_edit.text(),
+                'aSD': ip.primary_asd(),
+                'aSD_secondary': ip.secondary_asd(),
+            }
+            _session.save_session(
+                path, sequence=self._sequence, params=params,
+                results=self._results, target_orf_index=self._target_orf_index,
+                tir_min=getattr(self.viz_widget, '_tir_min', 0.0),
+                tir_max=(0.0 if getattr(self.viz_widget, '_tir_max', float('inf'))
+                         == float('inf') else self.viz_widget._tir_max))
+            self.status_label.setText(f'Session saved to {path}')
+        except Exception as exc:
+            QMessageBox.critical(self, 'Save error', str(exc))
+
+    def _open_session(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self, 'Open session', '',
+            'TIRex session (*.tirex);;All files (*)')
+        if not path:
+            return
+        try:
+            data = _session.load_session(path)
+        except Exception as exc:
+            QMessageBox.critical(self, 'Open error', str(exc))
+            return
+        self._sequence = data.get('sequence', '')
+        self._results = data.get('results', []) or []
+        self._target_orf_index = data.get('target_orf_index')
+        self.input_panel.seq_edit.setPlainText(self._sequence)
+        name = (data.get('params') or {}).get('name')
+        if name:
+            self.input_panel.seq_name_edit.setText(str(name))
+        if self._results:
+            self.orf_table.update_results(self._results)
+            self.viz_widget.set_data(self._sequence, self._results)
+        self.status_label.setText(
+            f'Loaded session: {len(self._results)} ORF(s), '
+            f'{len(self._sequence)} bp.')
+
+    def _apply_tuned_sequence(self, new_seq: str):
+        """Load a tuner-proposed edit into the input panel and re-analyze,
+        enabling rapid iterative editing."""
+        import re
+        new_seq = (new_seq or '').upper()
+        self.input_panel.seq_edit.setPlainText(new_seq)
+
+        # Bump a version suffix on the sequence name so iterations are distinct.
+        name = self.input_panel.seq_name_edit.text().strip() or 'sequence'
+        base = re.sub(r'_v\d+$', '', name)
+        self._tuner_iter = getattr(self, '_tuner_iter', 0) + 1
+        self.input_panel.seq_name_edit.setText(f'{base}_v{self._tuner_iter}')
+
+        self.status_label.setText(
+            f'Applied tuner edit → re-analyzing {len(new_seq)} bp sequence…')
+        # Re-run OSTIR via the normal input-panel path (reuses current options).
+        self.input_panel._on_run()
 
     def _open_gel_dialog(self):
         if not self._results:

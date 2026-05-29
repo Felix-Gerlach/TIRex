@@ -31,9 +31,12 @@ def main():
     )
 
     app = QApplication(sys.argv)
-    app.setStyle('Fusion')
     app.setApplicationName('TIRex')
     app.setApplicationVersion('1.0.0')
+
+    # Apply the modern TIRex theme (sets Fusion + palette + stylesheet)
+    from ui.theme import apply_theme
+    apply_theme(app)
 
     # Dependency check
     missing = check_viennarna()
@@ -59,4 +62,6 @@ def main():
 
 
 if __name__ == '__main__':
+    import multiprocessing
+    multiprocessing.freeze_support()   # needed for parallel scoring in frozen builds
     sys.exit(main())
